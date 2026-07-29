@@ -1,0 +1,25 @@
+# Dependencies
+frontend/node_modules/
+frontend/.next/
+frontend/.turbo/
+
+# Python
+backend/__pycache__/
+backend/*.py[cod]
+backend/.venv/
+backend/venv/
+backend/.pytest_cache/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Local data / uploads
+backend/uploads/
+backend/chroma_db/
+
+# Logs
+*.log
+npm-debug.log*
+pip-wheel-metadata/
