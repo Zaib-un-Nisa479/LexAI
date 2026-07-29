@@ -4,8 +4,19 @@ from fastapi.responses import FileResponse
 from config import UPLOAD_DIR
 from schemas import *
 import vectorstore as vs
-import vision, voice, agent
 import os, shutil, uuid
+
+try:
+    import vision
+    import voice
+    import agent
+except Exception as exc:
+    vision = None
+    voice = None
+    agent = None
+    startup_import_error = exc
+else:
+    startup_import_error = None
 
 app = FastAPI(
     title="LexAI — Legal Document Intelligence API",
@@ -25,7 +36,9 @@ def root():
         "system": "LexAI Legal Intelligence",
         "docs": "/docs",
         "chunks_in_db": vs.get_chunk_count(),
-        "documents": vs.get_all_documents()
+        "documents": vs.get_all_documents(),
+        "voice_available": voice is not None,
+        "startup_import_error": str(startup_import_error) if startup_import_error else None
     }
 
 # ── Document Ingestion ────────────────────────────────────
@@ -58,6 +71,9 @@ async def ingest_pdf(
 @app.post("/analyze/text", response_model=AnalysisResponse,
     summary="Analyze documents via text question")
 async def analyze_text(request: TextRequest):
+    if agent is None:
+        raise HTTPException(503, f"Analysis service unavailable: {startup_import_error}")
+
     try:
         result = agent.run_analysis(
             question=request.question,
@@ -77,6 +93,8 @@ async def analyze_voice(
     mode: str = Form(default="qa"),
     session_id: str = Form(default="default")
 ):
+    if voice is None or agent is None:
+        raise HTTPException(503, "Voice analysis is unavailable in this deployment.")
     # read audio bytes
     audio_bytes = await audio.read()
     suffix = os.path.splitext(audio.filename)[1] if audio.filename else ".wav"
@@ -120,6 +138,8 @@ async def analyze_vision(
     question: str = Form(default="Extract and analyze all text from this document"),
     ingest_after: bool = Form(default=True)
 ):
+    if vision is None:
+        raise HTTPException(503, "Vision analysis is unavailable in this deployment.")
     # save image
     save_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{image.filename}")
     with open(save_path, "wb") as f:
@@ -147,6 +167,9 @@ async def analyze_vision(
 @app.post("/analyze/risk-image",
     summary="Upload contract image — instant risk analysis")
 async def risk_from_image(image: UploadFile = File(...)):
+    if vision is None:
+        raise HTTPException(503, "Vision analysis is unavailable in this deployment.")
+
     save_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{image.filename}")
     with open(save_path, "wb") as f:
         shutil.copyfileobj(image.file, f)

@@ -1,15 +1,57 @@
-import whisper
-import sounddevice as sd
-import scipy.io.wavfile as wav
-import numpy as np
-from gtts import gTTS
-from config import WHISPER_MODEL_SIZE
-import os, tempfile
+import os
+import tempfile
 
-# load once at module level — cached in memory after first load
-print(f"Loading Whisper {WHISPER_MODEL_SIZE} model...")
-whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
-print("Whisper ready.")
+try:
+    import whisper
+except Exception as exc:
+    whisper = None
+    whisper_import_error = exc
+else:
+    whisper_import_error = None
+
+try:
+    import sounddevice as sd
+    import scipy.io.wavfile as wav
+    import numpy as np
+except Exception as exc:
+    sd = None
+    wav = None
+    np = None
+    sounddevice_import_error = exc
+else:
+    sounddevice_import_error = None
+
+try:
+    from gtts import gTTS
+except Exception as exc:
+    TTS = None
+    gtts_import_error = exc
+else:
+    TTS = gTTS
+    gtts_import_error = None
+
+from config import WHISPER_MODEL_SIZE
+
+# Load Whisper lazily only when transcription is requested.
+whisper_model = None
+
+
+def _get_whisper_model():
+    global whisper_model
+    if whisper_model is not None:
+        return whisper_model
+    if whisper is None:
+        raise RuntimeError("Whisper is not available in this deployment.")
+
+    try:
+        print(f"Loading Whisper {WHISPER_MODEL_SIZE} model...")
+        whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
+        print("Whisper ready.")
+    except Exception as exc:
+        raise RuntimeError(f"Whisper model could not be loaded: {exc}") from exc
+
+    return whisper_model
+
 
 def transcribe_audio_file(audio_path: str) -> dict:
     """
@@ -18,7 +60,9 @@ def transcribe_audio_file(audio_path: str) -> dict:
     Returns transcription + detected language + confidence.
     WHY: Core of voice input — converts speech to text for the agent.
     """
-    result = whisper_model.transcribe(
+    model = _get_whisper_model()
+
+    result = model.transcribe(
         audio_path,
         language=None,  # auto-detect language — handles Urdu, Arabic, etc.
         task="transcribe",
@@ -51,7 +95,10 @@ def text_to_speech(text: str, output_path: str = "response.mp3") -> str:
     Returns path to the generated audio file.
     WHY: Voice output completes the voice loop — answer is spoken back.
     """
-    tts = gTTS(text=text, lang="en", slow=False)
+    if TTS is None:
+        raise RuntimeError("Text-to-speech is not available in this deployment.")
+
+    tts = TTS(text=text, lang="en", slow=False)
     tts.save(output_path)
     return output_path
 
@@ -61,6 +108,9 @@ def record_from_microphone(seconds: int = 8, output_path: str = "input.wav") -> 
     Used for local testing — Streamlit frontend handles this in browser.
     WHY: Lets you test voice pipeline without the frontend running.
     """
+    if sd is None or wav is None or np is None:
+        raise RuntimeError("Microphone recording is unavailable because PortAudio is not installed.")
+
     sample_rate = 16000
     print(f"Recording {seconds} seconds... speak now")
     audio = sd.rec(int(seconds * sample_rate), samplerate=sample_rate,
