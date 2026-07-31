@@ -2,7 +2,10 @@
 
 A full-stack RAG (Retrieval-Augmented Generation) application that lets you upload legal documents — PDFs, scanned images, or spoken questions — and get grounded, source-cited answers, risk analysis, summaries, and clause extraction, powered by a self-correcting LangGraph agent.
 
-Built as an end-to-end capstone project: FastAPI + LangGraph backend, Next.js + TypeScript frontend, multimodal input (text, image, voice), and a genuinely agentic retrieval pipeline that knows when it doesn't know something.
+**🔗 Live demo:** https://frontend-nine-hazel-33.vercel.app
+**🔗 API docs (Swagger):** https://lexai-0vic.onrender.com/docs
+
+> Note: the backend runs on a free-tier instance that sleeps after 15 minutes of inactivity — the first request after idle time may take 30–60 seconds while it wakes up.
 
 ---
 
@@ -45,7 +48,7 @@ The frontend surfaces all of this — confidence level, which source was used, a
 | Backend framework | FastAPI |
 | Agent orchestration | LangGraph (StateGraph with conditional routing + checkpointed memory) |
 | LLM (generation) | Groq — `openai/gpt-oss-120b` |
-| Embeddings + Vision OCR | Google Gemini (`gemini-embedding-2-preview`, Gemini Vision) |
+| Embeddings + Vision OCR | Google Gemini |
 | Vector store | ChromaDB (persistent, local) |
 | Speech-to-text | OpenAI Whisper (local inference) |
 | Text-to-speech | gTTS |
@@ -54,6 +57,7 @@ The frontend surfaces all of this — confidence level, which source was used, a
 | Styling | Tailwind CSS + shadcn/ui |
 | Frontend state | Zustand |
 | File upload | react-dropzone |
+| Deployment | Render (backend, Docker) · Vercel (frontend) |
 
 ---
 
@@ -69,6 +73,7 @@ lexai/
 │   ├── voice.py           Whisper transcription + gTTS speech synthesis
 │   ├── schemas.py         Pydantic request/response models
 │   ├── config.py          Environment config, model names, RAG parameters
+│   ├── Dockerfile
 │   └── requirements.txt
 └── frontend/
     ├── src/
@@ -99,20 +104,13 @@ lexai/
 | `GET` | `/documents` | List all indexed documents |
 | `DELETE` | `/documents/all` | Clear the vector store |
 
-Interactive API docs available at `/docs` (Swagger UI) once the backend is running.
+Interactive API docs: https://lexai-0vic.onrender.com/docs
 
 ---
 
-## Getting started
+## Running locally
 
-### Prerequisites
-
-- Python 3.11+
-- Node.js 22 LTS
-- A [Google AI Studio](https://aistudio.google.com/apikey) API key (embeddings + vision)
-- A [Groq](https://console.groq.com) API key (generation)
-
-### Backend setup
+### Backend
 
 ```bash
 cd backend
@@ -123,37 +121,41 @@ venv\Scripts\Activate.ps1        # Windows
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in `backend/`:
+Create a `.env` file in `backend/` (see `.env.example`):
 ```
 GEMINI_API_KEY=your_gemini_key_here
 GROQ_API_KEY=your_groq_key_here
 ```
 
-Run the server:
 ```bash
 python -m uvicorn main:app --reload --port 8000
 ```
 
-Backend available at `http://127.0.0.1:8000` — Swagger docs at `http://127.0.0.1:8000/docs`.
-
-### Frontend setup
+### Frontend
 
 ```bash
 cd frontend
 npm install
 ```
 
-Create a `.env.local` file in `frontend/`:
+Create a `.env.local` file in `frontend/` (see `.env.example`):
 ```
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 ```
 
-Run the dev server:
 ```bash
 npm run dev
 ```
 
 Open `http://localhost:3000`.
+
+---
+
+## Deployment
+
+- **Backend** — Dockerized FastAPI app deployed on Render (free tier, Docker environment). Environment variables (`GEMINI_API_KEY`, `GROQ_API_KEY`) are set via Render's dashboard, not committed to the repo.
+- **Frontend** — Next.js app deployed on Vercel, with `NEXT_PUBLIC_API_URL` pointing at the Render backend, set via Vercel's environment variables.
+- **CORS** is locked to the deployed frontend origin and localhost, not left as a wildcard.
 
 ---
 
@@ -175,6 +177,7 @@ This project is a strong **document intelligence and triage assistant**, not a s
 - No citation verification against authoritative legal databases (uses open web search, not Westlaw/Lexis)
 - No jurisdiction-awareness in prompts
 - Single shared vector collection — not yet multi-tenant/access-controlled
+- Storage is ephemeral on the free-tier backend — uploaded documents reset when the service restarts or redeploys
 - Local file storage is unencrypted — not production-ready for confidential client data as-is
 
 These are documented deliberately rather than glossed over, because knowing the boundary between "fast contract triage tool" and "legal advice engine" is itself part of responsible AI system design.
