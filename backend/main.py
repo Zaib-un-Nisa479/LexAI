@@ -25,9 +25,8 @@ app = FastAPI(
 )
 
 app.add_middleware(CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://your-frontend.vercel.app"],
+    allow_origins=["http://localhost:3000", "https://frontend-nine-hazel-33.vercel.app"],
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
-
 
 # ── Health ────────────────────────────────────────────────
 @app.get("/", summary="Health check")
