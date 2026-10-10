@@ -1,4 +1,4 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://lexai-0vic.onrender.com";
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
