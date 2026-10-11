@@ -1,25 +1,16 @@
 import os
-import tempfile
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 try:
-    import whisper
+    from groq import Groq
 except Exception as exc:
-    whisper = None
-    whisper_import_error = exc
+    Groq = None
+    groq_import_error = exc
 else:
-    whisper_import_error = None
-
-try:
-    import sounddevice as sd
-    import scipy.io.wavfile as wav
-    import numpy as np
-except Exception as exc:
-    sd = None
-    wav = None
-    np = None
-    sounddevice_import_error = exc
-else:
-    sounddevice_import_error = None
+    groq_import_error = None
 
 try:
     from gtts import gTTS
@@ -30,92 +21,66 @@ else:
     TTS = gTTS
     gtts_import_error = None
 
-from config import WHISPER_MODEL_SIZE
+# Speech-to-text runs on Groq's servers, so nothing heavy loads on Render.
+GROQ_STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 
-# Load Whisper lazily only when transcription is requested.
-whisper_model = None
+_client = None
 
 
-def _get_whisper_model():
-    global whisper_model
-    if whisper_model is not None:
-        return whisper_model
-    if whisper is None:
-        raise RuntimeError("Whisper is not available in this deployment.")
+def _get_client():
+    global _client
+    if _client is not None:
+        return _client
+    if Groq is None:
+        raise RuntimeError(f"groq package is not installed: {groq_import_error}")
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is not set in the environment")
+    _client = Groq(api_key=api_key, timeout=45.0, max_retries=1)
+    return _client
 
-    try:
-        print(f"Loading Whisper {WHISPER_MODEL_SIZE} model...")
-        whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
-        print("Whisper ready.")
-    except Exception as exc:
-        raise RuntimeError(f"Whisper model could not be loaded: {exc}") from exc
 
-    return whisper_model
+def transcribe_audio_bytes(audio_bytes: bytes, suffix: str = ".webm") -> dict:
+    """
+    Transcribe uploaded audio using Groq's hosted Whisper.
+    Accepts flac, mp3, mp4, m4a, ogg, opus, wav, webm.
+    The file extension matters: Groq uses it to detect the format.
+    Returns the same shape as before: text, language, segments.
+    """
+    if not suffix.startswith("."):
+        suffix = "." + suffix
+
+    client = _get_client()
+    result = client.audio.transcriptions.create(
+        file=(f"audio{suffix}", audio_bytes),
+        model=GROQ_STT_MODEL,
+        response_format="verbose_json",  # includes detected language
+        temperature=0.0,
+    )
+    text = (getattr(result, "text", "") or "").strip()
+    return {
+        "text": text,
+        "language": getattr(result, "language", None) or "unknown",
+        "segments": len(getattr(result, "segments", None) or []),
+    }
 
 
 def transcribe_audio_file(audio_path: str) -> dict:
-    """
-    Transcribe an audio file to text using Whisper.
-    Accepts: WAV, MP3, M4A, FLAC, OGG — Whisper handles all formats.
-    Returns transcription + detected language + confidence.
-    WHY: Core of voice input — converts speech to text for the agent.
-    """
-    model = _get_whisper_model()
+    """Transcribe an audio file on disk (same Groq call as the bytes version)."""
+    with open(audio_path, "rb") as f:
+        data = f.read()
+    suffix = os.path.splitext(audio_path)[1] or ".wav"
+    return transcribe_audio_bytes(data, suffix=suffix)
 
-    result = model.transcribe(
-        audio_path,
-        language=None,  # auto-detect language — handles Urdu, Arabic, etc.
-        task="transcribe",
-        verbose=False
-    )
-    return {
-        "text": result["text"].strip(),
-        "language": result.get("language", "unknown"),
-        "segments": len(result.get("segments", []))
-    }
-
-def transcribe_audio_bytes(audio_bytes: bytes, suffix: str = ".wav") -> dict:
-    """
-    Transcribe audio from bytes (received from FastAPI upload).
-    FastAPI gives you bytes — save to temp file, transcribe, clean up.
-    WHY: FastAPI receives uploaded files as bytes objects, not file paths.
-    """
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(audio_bytes)
-        tmp_path = tmp.name
-    try:
-        result = transcribe_audio_file(tmp_path)
-        return result
-    finally:
-        os.unlink(tmp_path)  # always clean up temp file
 
 def text_to_speech(text: str, output_path: str = "response.mp3") -> str:
     """
     Convert text to speech using gTTS.
-    Returns path to the generated audio file.
-    WHY: Voice output completes the voice loop — answer is spoken back.
+    Returns the path to the generated audio file.
     """
     if TTS is None:
-        raise RuntimeError("Text-to-speech is not available in this deployment.")
+        raise RuntimeError(f"Text-to-speech is not available: {gtts_import_error}")
 
     tts = TTS(text=text, lang="en", slow=False)
     tts.save(output_path)
-    return output_path
-
-def record_from_microphone(seconds: int = 8, output_path: str = "input.wav") -> str:
-    """
-    Record audio from system microphone.
-    Used for local testing — Streamlit frontend handles this in browser.
-    WHY: Lets you test voice pipeline without the frontend running.
-    """
-    if sd is None or wav is None or np is None:
-        raise RuntimeError("Microphone recording is unavailable because PortAudio is not installed.")
-
-    sample_rate = 16000
-    print(f"Recording {seconds} seconds... speak now")
-    audio = sd.rec(int(seconds * sample_rate), samplerate=sample_rate,
-        channels=1, dtype=np.int16)
-    sd.wait()
-    wav.write(output_path, sample_rate, audio)
-    print("Recording complete.")
     return output_path

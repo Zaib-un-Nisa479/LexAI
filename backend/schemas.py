@@ -20,6 +20,7 @@ class VoiceResponse(BaseModel):
     sources: List[str]
     mode_used: str
     audio_url: Optional[str] = None
+    audio_url: Optional[str] = None
 
 class VisionResponse(BaseModel):
     extracted_text: str

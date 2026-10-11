@@ -18,6 +18,8 @@ except Exception as exc:
 else:
     startup_import_error = None
 
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 app = FastAPI(
     title="LexAI — Legal Document Intelligence API",
     description="Multimodal RAG agent for legal document analysis",
@@ -85,34 +87,62 @@ async def analyze_text(request: TextRequest):
         raise HTTPException(500, f"Analysis failed: {str(e)}")
 
 # ── Voice Analysis ────────────────────────────────────────
+# Browsers often upload recordings with no file extension, so fall back to the content type.
+CONTENT_TYPE_EXT = {
+    "audio/webm": ".webm", "video/webm": ".webm",
+    "audio/ogg": ".ogg", "audio/opus": ".ogg",
+    "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
+    "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/wave": ".wav",
+    "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/m4a": ".m4a",
+}
+
+# Plain `def` (not async): FastAPI runs it in a worker thread, so the slow
+# transcription / LLM / TTS calls don't freeze the whole server.
 @app.post("/analyze/voice", response_model=VoiceResponse,
     summary="Upload voice recording — transcribe and analyze")
-async def analyze_voice(
+def analyze_voice(
     request: Request,
     audio: UploadFile = File(...),
     mode: str = Form(default="qa"),
     session_id: str = Form(default="default")
 ):
     if voice is None or agent is None:
-        raise HTTPException(503, "Voice analysis is unavailable in this deployment.")
-    # read audio bytes
-    audio_bytes = await audio.read()
-    suffix = os.path.splitext(audio.filename)[1] if audio.filename else ".wav"
+        raise HTTPException(503, f"Voice analysis is unavailable: {startup_import_error}")
 
-    # transcribe
-    transcription_result = voice.transcribe_audio_bytes(audio_bytes, suffix=suffix)
+    audio_bytes = audio.file.read()
+    if not audio_bytes:
+        raise HTTPException(400, "Empty audio upload")
+
+    content_type = (audio.content_type or "").split(";")[0].strip().lower()
+    suffix = os.path.splitext(audio.filename or "")[1].lower() or CONTENT_TYPE_EXT.get(content_type, ".webm")
+
+    # 1) transcribe
+    try:
+        transcription_result = voice.transcribe_audio_bytes(audio_bytes, suffix=suffix)
+    except Exception as e:
+        raise HTTPException(500, f"Transcription failed: {str(e)}")
     question = transcription_result["text"]
 
     if not question:
         raise HTTPException(400, "No speech detected in audio")
 
-    # run through agent
-    result = agent.run_analysis(question, mode=mode, session_id=session_id)
+    # 2) run through agent
+    try:
+        result = agent.run_analysis(question, mode=mode, session_id=session_id)
+    except Exception as e:
+        raise HTTPException(500, f"Analysis failed: {str(e)}")
 
-    audio_filename = f"{uuid.uuid4()}.mp3"
-    audio_path = os.path.join(UPLOAD_DIR, audio_filename)
-    voice.text_to_speech(result["answer"], output_path=audio_path)
-    audio_url = request.url_for("get_audio", filename=audio_filename)
+    # 3) spoken reply (optional: if TTS fails, the text answer is still returned)
+    audio_url = None
+    try:
+        audio_filename = f"{uuid.uuid4()}.mp3"
+        audio_path = os.path.join(UPLOAD_DIR, audio_filename)
+        voice.text_to_speech(result["answer"][:1500], output_path=audio_path)
+        # behind Render's proxy the scheme can come through as http; force the real one
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+        audio_url = str(request.url_for("get_audio", filename=audio_filename)).replace("http://", f"{proto}://", 1)
+    except Exception as e:
+        print(f"TTS failed: {e}")
 
     return VoiceResponse(
         transcription=question,
@@ -183,7 +213,6 @@ def list_documents():
         "total_chunks": vs.get_chunk_count()
     }
 
-# ── Clear vectorstore ─────────────────────────────────────
 # ── Clear vectorstore ─────────────────────────────────────
 @app.delete("/documents/all", summary="Clear all indexed documents")
 def clear_documents():
